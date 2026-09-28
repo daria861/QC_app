@@ -10,6 +10,8 @@
   <script src="https://cdn.jsdelivr.net/npm/html-docx-js-version-updated@0.4.0/dist/html-docx.min.js"></script>
   <!-- FileSaver Library -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <!-- Excel Exporter Library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
@@ -75,6 +77,9 @@
         </button>
         <button onclick="exportToWord()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-2 rounded-md transition flex items-center gap-1.5">
           <i class="fa-solid fa-file-word"></i> Export Word (.docx)
+        </button>
+        <button id="excelBtn" onclick="exportToExcel()" class="bg-green-700 hover:bg-green-800 text-white text-xs font-semibold px-3 py-2 rounded-md transition flex items-center gap-1.5">
+          <i class="fa-solid fa-file-excel"></i> Export Excel (.xlsx)
         </button>
         <button onclick="exportToHTML()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-2 rounded-md transition flex items-center gap-1.5">
           <i class="fa-solid fa-code"></i> Export HTML
@@ -392,6 +397,222 @@
       const str = JSON.stringify(reportData);
       const kb = (str.length / 1024).toFixed(1);
       document.getElementById('storageUsage').innerText = kb + " KB";
+    }
+
+    // ===== Export Excel (.xlsx) =====
+    // Builds a styled workbook: "QC Report" (table + embedded screenshots) and "Summary" (live formulas).
+    function buildQcWorkbook(ExcelJS, rows, title, actionOptions) {
+      const FONT = 'Arial';
+      const C = { orange: 'FFEA580C', dark: 'FFC2410C', light: 'FFFFF7ED', zebra: 'FFFAFAFA', line: 'FFE2E8F0' };
+      const thin = { style: 'thin', color: { argb: C.line } };
+      const border = { top: thin, left: thin, bottom: thin, right: thin };
+      const solid = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb }, bgColor: { argb } });
+
+      const STATUSES = [
+        ['To Do', 'FFE2E8F0', 'FF334155'], ['In Review', 'FFFEF3C7', 'FF92400E'],
+        ['Done', 'FFDCFCE7', 'FF166534'], ['Waiting for', 'FFDBEAFE', 'FF1E40AF']
+      ];
+      const ACTION_PALETTE = [
+        ['FFDBEAFE', 'FF1E40AF'], ['FFEDE9FE', 'FF5B21B6'], ['FFFEF3C7', 'FF92400E'],
+        ['FFFCE7F3', 'FF9D174D'], ['FFDCFCE7', 'FF166534'], ['FFCFFAFE', 'FF155E75']
+      ];
+      const actions = [...actionOptions];
+      rows.forEach(r => { if (r.actionTo && !actions.includes(r.actionTo)) actions.push(r.actionTo); });
+
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'QC Audit Report Generator';
+      const ws = wb.addWorksheet('QC Report', { views: [{ state: 'frozen', xSplit: 2, ySplit: 4, showGridLines: false }] });
+      const widths = [5, 18, 26, 13, 14, 20, 52, 46];
+      ws.columns = widths.map(w => ({ width: w }));
+      const IMG_COL_PX = 46 * 7 + 5, BOX_W = 320, BOX_H = 250, MAX_ROW_PX = 540;
+
+      ws.mergeCells('A1:H1');
+      const t = ws.getCell('A1');
+      t.value = title;
+      t.font = { name: FONT, size: 18, bold: true, color: { argb: 'FFFFFFFF' } };
+      t.fill = solid(C.orange); t.alignment = { vertical: 'middle', indent: 1 };
+      ws.getRow(1).height = 38;
+      ws.mergeCells('A2:H2');
+      const d = ws.getCell('A2');
+      d.value = 'Exported ' + new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) +
+        '  ·  Status and Action To are dropdowns; edit them as issues progress';
+      d.font = { name: FONT, size: 9, italic: true, color: { argb: 'FF64748B' } };
+      d.fill = solid(C.light); d.alignment = { vertical: 'middle', indent: 1 };
+      ws.getRow(2).height = 20;
+
+      const HR = 4;
+      ['#', 'Page Name', 'Page URL', 'Status', 'Action To', 'Element', 'Description', 'Screenshot'].forEach((h, i) => {
+        const c = ws.getCell(HR, i + 1);
+        const center = [0, 3, 4, 7].includes(i);
+        c.value = h;
+        c.font = { name: FONT, size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = solid(C.dark); c.border = border;
+        c.alignment = { horizontal: center ? 'center' : 'left', vertical: 'middle', indent: center ? 0 : 1 };
+      });
+      ws.getRow(HR).height = 26;
+
+      const first = HR + 1;
+      rows.forEach((r, i) => {
+        const R = first + i, row = ws.getRow(R);
+        const vals = [i + 1, r.pageName || '', r.pageUrl || '', r.status || 'To Do', r.actionTo || '', r.element || '', r.description || ''];
+        vals.forEach((v, k) => {
+          const c = row.getCell(k + 1);
+          const url = (k === 2 && /^https?:\/\//i.test(v)) ? v : null;
+          c.value = url ? { text: v, hyperlink: v } : v;
+          c.font = { name: FONT, size: 10 };
+          c.border = border;
+          c.alignment = { vertical: 'middle', wrapText: true, horizontal: [0, 3, 4].includes(k) ? 'center' : 'left', indent: [0, 3, 4].includes(k) ? 0 : 1 };
+          if (i % 2) c.fill = solid(C.zebra);
+        });
+        row.getCell(1).font = { name: FONT, size: 9, color: { argb: 'FF94A3B8' } };
+        row.getCell(2).font = { name: FONT, size: 10, bold: true, color: { argb: 'FF1E293B' } };
+        row.getCell(3).font = { name: FONT, size: 9, color: { argb: 'FF2563EB' }, underline: true };
+        row.getCell(6).font = { name: FONT, size: 10, bold: true, color: { argb: 'FF475569' } };
+        const ic = row.getCell(8); ic.border = border; if (i % 2) ic.fill = solid(C.zebra);
+
+        const lines = String(r.description || '').split('\n').reduce((s, l) => s + Math.max(1, Math.ceil(l.length / 58)), 0);
+        let hPx = Math.max(46, (lines * 14 + 12) / 0.75);
+
+        const imgs = r.imgs || [];
+        if (imgs.length) {
+          const n = imgs.length, gap = 8;
+          const boxH = Math.min(BOX_H, Math.floor((MAX_ROW_PX - gap * (n + 1)) / n));
+          let y = gap;
+          const placed = imgs.map(im => {
+            const s = Math.min(BOX_W / im.w, boxH / im.h, 1);
+            const dw = Math.round(im.w * s), dh = Math.round(im.h * s);
+            const p = { im, dw, dh, y }; y += dh + gap; return p;
+          });
+          hPx = Math.max(hPx, y);
+          const rowPx = Math.min(hPx, MAX_ROW_PX * 1.0);
+          placed.forEach(p => {
+            const id = wb.addImage({ base64: p.im.base64, extension: 'png' });
+            ws.addImage(id, {
+              tl: { col: 7 + Math.max(0, (IMG_COL_PX - p.dw) / 2) / IMG_COL_PX, row: (R - 1) + p.y / rowPx },
+              ext: { width: p.dw, height: p.dh }, editAs: 'oneCell'
+            });
+          });
+          hPx = rowPx;
+        } else {
+          ic.value = 'No screenshot';
+          ic.font = { name: FONT, size: 9, italic: true, color: { argb: 'FF94A3B8' } };
+          ic.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+        row.height = Math.min(hPx * 0.75, 409);
+      });
+      const last = first + rows.length - 1;
+
+      if (rows.length) {
+        const dv = (col, list) => {
+          const f = '"' + list.join(',') + '"';
+          if (f.length > 255) return; // Excel limit for inline lists
+          for (let R = first; R <= last; R++) ws.getCell(col + R).dataValidation = { type: 'list', allowBlank: false, formulae: [f] };
+        };
+        dv('D', STATUSES.map(s => s[0])); dv('E', actions);
+        const cf = (ref, text, bg, fg) => ({ type: 'cellIs', operator: 'equal', formulae: ['"' + text + '"'],
+          style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: bg } }, font: { bold: true, color: { argb: fg } } } });
+        ws.addConditionalFormatting({ ref: `D${first}:D${last}`, rules: STATUSES.map(s => cf('', s[0], s[1], s[2])) });
+        ws.addConditionalFormatting({ ref: `E${first}:E${last}`, rules: actions.map((a, k) => cf('', a, ...ACTION_PALETTE[k % ACTION_PALETTE.length])) });
+        ws.autoFilter = { from: { row: HR, column: 1 }, to: { row: last, column: 8 } };
+      }
+      ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: `${HR}:${HR}` };
+
+      // ---------- Summary ----------
+      const sm = wb.addWorksheet('Summary', { views: [{ showGridLines: false }] });
+      [3, 30, 12, 3, 30, 12].forEach((w, i) => sm.getColumn(i + 1).width = w);
+      sm.mergeCells('B1:F1');
+      const st = sm.getCell('B1');
+      st.value = title + ' — Summary';
+      st.font = { name: FONT, size: 18, bold: true, color: { argb: 'FFFFFFFF' } };
+      st.alignment = { vertical: 'middle', indent: 1 };
+      ['B', 'C', 'D', 'E', 'F'].forEach(c => sm.getCell(c + '1').fill = solid(C.orange));
+      sm.getRow(1).height = 38;
+
+      const rng = (col) => `'QC Report'!$${col}$${first}:$${col}$${Math.max(last, first)}`;
+      const kpi = (cell, label, formula, result) => {
+        const l = sm.getCell(cell); l.value = label; l.font = { name: FONT, size: 10, color: { argb: 'FF64748B' } };
+        const v = sm.getCell(cell.replace('3', '4'));
+        v.value = { formula, result }; v.font = { name: FONT, size: 28, bold: true, color: { argb: C.dark } };
+        v.alignment = { horizontal: 'left', indent: 1 };
+      };
+      kpi('B3', 'Total issues', `COUNTA(${rng('A')})`, rows.length);
+      kpi('E3', 'With screenshot', `COUNTA(${rng('A')})-COUNTIF(${rng('H')},"No screenshot")`, rows.filter(r => (r.imgs || []).length).length);
+      sm.getRow(4).height = 40;
+
+      const table = (top, colLetter, head, labels, colKey, countFn) => {
+        const cIdx = colLetter.charCodeAt(0) - 64;
+        [head, 'Issues'].forEach((h, k) => {
+          const c = sm.getCell(top, cIdx + k); c.value = h;
+          c.font = { name: FONT, size: 10, bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = solid(C.dark);
+          c.alignment = { horizontal: k ? 'center' : 'left', vertical: 'middle', indent: k ? 0 : 1 };
+        });
+        const vcol = String.fromCharCode(64 + cIdx + 1);
+        labels.forEach((lab, k) => {
+          const R = top + 1 + k;
+          const a = sm.getCell(R, cIdx), b = sm.getCell(R, cIdx + 1);
+          a.value = lab; b.value = { formula: `COUNTIF(${rng(colKey)},${colLetter}${R})`, result: countFn(lab) };
+          [a, b].forEach(x => { x.font = { name: FONT, size: 10 }; x.border = border; });
+          a.alignment = { indent: 1, vertical: 'middle' }; b.alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+        const R = top + 1 + labels.length;
+        const a = sm.getCell(R, cIdx), b = sm.getCell(R, cIdx + 1);
+        a.value = 'Total'; b.value = { formula: `SUM(${vcol}${top + 1}:${vcol}${R - 1})`, result: labels.reduce((s, l) => s + countFn(l), 0) };
+        [a, b].forEach(x => { x.font = { name: FONT, size: 10, bold: true }; x.border = border; x.fill = solid(C.light); });
+        a.alignment = { indent: 1 }; b.alignment = { horizontal: 'center' };
+        if (labels.length) sm.addConditionalFormatting({ ref: `${vcol}${top + 1}:${vcol}${R - 1}`,
+          rules: [{ type: 'dataBar', cfvo: [{ type: 'num', value: 0 }, { type: 'max' }], color: { argb: 'FFFDBA74' } }] });
+        return R;
+      };
+      const count = (key) => (lab) => rows.filter(r => (r[key] || (key === 'status' ? 'To Do' : '')) === lab).length;
+      const e1 = table(6, 'B', 'Status', STATUSES.map(s => s[0]), 'D', count('status'));
+      const e2 = table(6, 'E', 'Action To', actions, 'E', count('actionTo'));
+      const pages = []; rows.forEach(r => { const p = r.pageName || ''; if (!pages.includes(p)) pages.push(p); });
+      table(Math.max(e1, e2) + 2, 'B', 'Page', pages, 'B', count('pageName'));
+      return wb;
+    }
+
+    async function prepImageForExcel(src) {
+      let url = src, revoke = false;
+      if (!src.startsWith('data:')) {
+        const resp = await fetch(src);
+        url = URL.createObjectURL(await resp.blob()); revoke = true;
+      }
+      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+      const scale = Math.min(1, 1000 / img.naturalWidth);
+      const cv = document.createElement('canvas');
+      cv.width = Math.max(1, Math.round(img.naturalWidth * scale)); cv.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(img, 0, 0, cv.width, cv.height);
+      if (revoke) URL.revokeObjectURL(url);
+      return { base64: cv.toDataURL('image/png'), w: img.naturalWidth, h: img.naturalHeight };
+    }
+
+    async function exportToExcel() {
+      const btn = document.getElementById('excelBtn');
+      const label = btn.innerHTML;
+      btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Building…';
+      try {
+        const title = (document.getElementById('reportTitle').innerText || '').trim() || 'QC Audit Report';
+        const skipped = [];
+        const rows = [];
+        for (const item of reportData) {
+          const imgs = [];
+          for (const src of (item.images || [])) {
+            try { imgs.push(await prepImageForExcel(src)); } catch (e) { skipped.push(item.element || item.pageName || 'row'); }
+          }
+          rows.push({ ...item, imgs });
+        }
+        const wb = buildQcWorkbook(ExcelJS, rows, title, ACTION_OPTIONS);
+        const buf = await wb.xlsx.writeBuffer();
+        const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'qc-report';
+        saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+               slug + '-' + new Date().toISOString().slice(0, 10) + '.xlsx');
+        if (skipped.length) alert('Some screenshots could not be loaded and were left out:\n' + [...new Set(skipped)].join('\n'));
+      } catch (e) {
+        console.error(e); alert('Excel export failed: ' + e.message);
+      } finally {
+        btn.disabled = false; btn.innerHTML = label;
+      }
     }
 
     // Export Word Document (.docx)
